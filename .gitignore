@@ -1,0 +1,4 @@
+osmpp
+*.out
+*.pbf
+build/*
