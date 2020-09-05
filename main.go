@@ -3,16 +3,17 @@ Purpose:
 - OSM data pre-processing
 
 Description:
-- Duplicates OSM junction point nodes.
+- Processes node_network and turning_circle objects.
 
 Releases:
 - v0.1.0 - 2019/11/21 : initial release
+- v0.2.0 - 2020/09/05 : turning_circle/loop processing added
 
 Author:
 - Klaus Tockloth
 
 Copyright and license:
-- Copyright (c) 2019 Klaus Tockloth
+- Copyright (c) 2019,2020 Klaus Tockloth
 - MIT license
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software
@@ -33,8 +34,18 @@ out of or in connection with the software or the use or other dealings in the so
 Contact (eMail):
 - freizeitkarte@googlemail.com
 
-Remarks:
-- NN
+Remarks (concerning osm package):
+- This package refers to the core OSM data types as Objects. The Node, Way, Relation, Changeset,
+  Note and User types implement the osm.Object interface and can be referenced using the osm.ObjectID
+  type. As a result it is possible to have a slice of []osm.Object that contains nodes, changesets
+  and users.
+- Individual versions of the core OSM Map Data types are referred to as Elements and the set of versions
+  for a give Node, Way or Relation is referred to as a Feature. For example, an osm.ElementID could refer
+  to "Node with id 10 and version 3" and the osm.FeatureID would refer to "all versions of node with id
+  10." Put another way, features represent a road and how it's changed over time and an element is a
+  specific version of that feature.
+- A number of helper methods are provided for dealing with features and elements. The idea is to make
+  it easy to work with a Way and its member nodes, for example.
 
 Links:
 - https://github.com/paulmach/osm
@@ -62,11 +73,14 @@ import (
 // general program info
 var (
 	_, progName = filepath.Split(os.Args[0])
-	progVersion = "v0.1.0"
-	progDate    = "2019/11/23"
+	progVersion = "v0.2.0"
+	progDate    = "2020/09/05"
 	progPurpose = "OSM data pre-processing"
-	progInfo    = "Duplicates OSM junction point nodes."
+	progInfo    = "Processes node_network and turning_circle objects."
 )
+
+// node ID for new node objects
+var newNodeID osm.NodeID
 
 /*
 init initializes this program
@@ -127,9 +141,13 @@ func main() {
 	nodes, ways, relations := 0, 0, 0
 	stats := newElementStats()
 
-	nodeID := osm.NodeID(*startNode)
+	newNodeID = osm.NodeID(*startNode)
 	junctionPointsFound := 0
-	juctionPointsWritten := 0
+
+	turningCirclePointsFound := 0
+	turningLoopPointsFound := 0
+	turningCircleLoop := make(map[osm.NodeID]*osm.Node)
+	turningCircleLoopModified := 0
 
 	minLat, maxLat := math.MaxFloat64, -math.MaxFloat64
 	minLon, maxLon := math.MaxFloat64, -math.MaxFloat64
@@ -161,15 +179,12 @@ func main() {
 			if e.Lat > maxLat {
 				maxLat = e.Lat
 			}
-
 			if e.Lat < minLat {
 				minLat = e.Lat
 			}
-
 			if e.Lon > maxLon {
 				maxLon = e.Lon
 			}
-
 			if e.Lon < minLon {
 				minLon = e.Lon
 			}
@@ -177,61 +192,37 @@ func main() {
 			tags := e.TagMap()
 			// id := e.ElementID()
 			if len(tags) > 0 {
+				// process node_network objects
 				tagValue, found := tags["network:type"]
 				if found && tagValue == "node_network" {
 					junctionPointsFound++
-					nameKey := "name"
-					nameValue, _ := tags[nameKey]
+					createNewNodeNetworkObject(writer, e)
+				}
 
-					refKey := "rcn_ref" // cycling
-					refValue, found := tags[refKey]
-					if found {
-						duplicateNetworkJunctionPoint(writer, e, nodeID, refKey, refValue, nameKey, nameValue)
-						nodeID++
-						juctionPointsWritten++
+				// process turning_circle/loop objects
+				// store all highway=turning_circle/loop objects in a map for further processing
+				tagValue, found = tags["highway"]
+				if found {
+					if tagValue == "turning_circle" {
+						turningCirclePointsFound++
+						turningCircleLoop[e.ID] = e
+						/*
+							fmt.Printf("ObjectID: %v, highway=%v\n", e.ObjectID(), tagValue)
+							fmt.Printf("ElementID: %v, highway=%v\n", e.ElementID(), tagValue)
+							fmt.Printf("FeatureID: %v, highway=%v\n", e.FeatureID(), tagValue)
+							fmt.Printf("NodeID: %v, highway=%v\n", e.ID, tagValue)
+							for key, value := range tags {
+								fmt.Printf("ID: %v, %v = %v\n", e.ElementID(), key, value)
+							}
+						*/
 					}
-
-					refKey = "rwn_ref" // walking
-					refValue, found = tags[refKey]
-					if found {
-						duplicateNetworkJunctionPoint(writer, e, nodeID, refKey, refValue, nameKey, nameValue)
-						nodeID++
-						juctionPointsWritten++
-					}
-
-					refKey = "rin_ref" // inline skating
-					refValue, found = tags[refKey]
-					if found {
-						duplicateNetworkJunctionPoint(writer, e, nodeID, refKey, refValue, nameKey, nameValue)
-						nodeID++
-						juctionPointsWritten++
-					}
-
-					refKey = "rhn_ref" // horse riding
-					refValue, found = tags[refKey]
-					if found {
-						duplicateNetworkJunctionPoint(writer, e, nodeID, refKey, refValue, nameKey, nameValue)
-						nodeID++
-						juctionPointsWritten++
-					}
-
-					refKey = "rpn_ref" // canoeing
-					refValue, found = tags[refKey]
-					if found {
-						duplicateNetworkJunctionPoint(writer, e, nodeID, refKey, refValue, nameKey, nameValue)
-						nodeID++
-						juctionPointsWritten++
-					}
-
-					refKey = "rmn_ref" // motorboat driving
-					refValue, found = tags[refKey]
-					if found {
-						duplicateNetworkJunctionPoint(writer, e, nodeID, refKey, refValue, nameKey, nameValue)
-						nodeID++
-						juctionPointsWritten++
+					if tagValue == "turning_loop" {
+						turningLoopPointsFound++
+						turningCircleLoop[e.ID] = e
 					}
 				}
 			}
+
 		case *osm.Way:
 			ways++
 			ts = e.Timestamp
@@ -241,6 +232,16 @@ func main() {
 				maxNodeRefs = l
 				maxNodeRefsID = e.ID
 			}
+
+			tags := e.TagMap()
+			if len(tags) > 0 {
+				// add highway type to turning_circle/loop node (a turning object can be part of more than one highway (e.g. residential + footway))
+				tagValue, found := tags["highway"]
+				if found && (tagValue == "residential" || tagValue == "living_street" || tagValue == "unclassified" || tagValue == "service" || tagValue == "track") {
+					turningCircleLoopModified += addHighwayTypeToTurningCircleLoop(e, tags, turningCircleLoop, tagValue)
+				}
+			}
+
 		case *osm.Relation:
 			relations++
 			ts = e.Timestamp
@@ -268,7 +269,34 @@ func main() {
 
 	fmt.Printf("\nJunction point statistics:\n")
 	fmt.Printf("  Points found            : %v\n", junctionPointsFound)
-	fmt.Printf("  Nodes written           : %v\n", juctionPointsWritten)
+
+	fmt.Printf("\nNew nodes created:\n")
+	fmt.Printf("  Nodes written           : %v\n", (int(newNodeID) - *startNode))
+
+	fmt.Printf("\nTurning circle/loop point statistics:\n")
+	fmt.Printf("  turning_circle found    : %v\n", turningCirclePointsFound)
+	fmt.Printf("  turning_loop found      : %v\n", turningLoopPointsFound)
+	fmt.Printf("  turning objects total   : %v\n", len(turningCircleLoop))
+	fmt.Printf("  highway types added     : %v\n", turningCircleLoopModified)
+	// build statistic
+	turningStatistic := make(map[string]int)
+	for _, value := range turningCircleLoop {
+		// check if "fzk_turning" tag exists
+		fzkTagFound := false
+		for _, tag := range value.Tags {
+			if tag.Key == "fzk_turning" {
+				turningStatistic[tag.Value]++
+				fzkTagFound = true
+				break
+			}
+		}
+		if fzkTagFound == false {
+			turningStatistic["not_set"]++
+		}
+	}
+	for key, value := range turningStatistic {
+		fmt.Printf("  %-23s : %v\n", key, value)
+	}
 
 	fmt.Printf("\nOSM data statistics:\n")
 	fmt.Printf("  Timestamp min           : %v\n", minTS.Format(time.RFC3339))
@@ -294,6 +322,33 @@ func main() {
 	fmt.Printf("  Relrefs max             : %v\n", maxRelRefs)
 	fmt.Printf("  Relrefs max object      : relation %v\n", maxRelRefsID)
 
+	// write/duplicate turning_circle/loop objects (with unmodified ID)
+	for _, value := range turningCircleLoop {
+		// check if "fzk_turning" tag exists
+		fzkTagFound := false
+		for _, tag := range value.Tags {
+			if tag.Key == "fzk_turning" {
+				fzkTagFound = true
+				break
+			}
+		}
+		if fzkTagFound == false {
+			// add tag "fzk_turning=not_set"
+			freizeitkarteTag := osm.Tag{Key: "fzk_turning", Value: "not_set"}
+			value.Tags = append(value.Tags, freizeitkarteTag)
+		}
+
+		data, err := xml.MarshalIndent(value, "  ", "  ")
+		if err != nil {
+			log.Fatalf("error <%v> at xml.MarshalIndent()", err)
+		}
+
+		_, err = fmt.Fprintf(writer, "%s\n", string(data))
+		if err != nil {
+			log.Fatalf("error writing output file: %v", err)
+		}
+	}
+
 	_, err = fmt.Fprintf(writer, "</osm>\n")
 	if err != nil {
 		log.Fatalf("error writing file: %v", err)
@@ -315,21 +370,23 @@ func main() {
 	os.Exit(0)
 }
 
-// Stats is a shared bit of code to accumulate stats from the element ids.
+// elementStats is a shared bit of code to accumulate stats from the element ids.
 type elementStats struct {
 	Ranges     map[osm.Type]*idRange
 	MaxVersion int
-
-	MaxTags   int
-	MaxTagsID osm.ElementID
+	MaxTags    int
+	MaxTagsID  osm.ElementID
 }
 
+// idRange defines min and max ID value
 type idRange struct {
 	Min, Max int64
 }
 
+/*
+newElementStats creates new elements static map
+*/
 func newElementStats() *elementStats {
-
 	return &elementStats{
 		Ranges: map[osm.Type]*idRange{
 			osm.TypeNode:     {Min: math.MaxInt64},
@@ -339,34 +396,256 @@ func newElementStats() *elementStats {
 	}
 }
 
+/*
+Add adds max version and max tags
+*/
 func (s *elementStats) Add(id osm.ElementID, tags osm.Tags) {
-
 	s.Ranges[id.Type()].Add(id.Ref())
-
 	if v := id.Version(); v > s.MaxVersion {
 		s.MaxVersion = v
 	}
-
 	if l := len(tags); l > s.MaxTags {
 		s.MaxTags = l
 		s.MaxTagsID = id
 	}
 }
 
+/*
+Add adds min or max ID
+*/
 func (r *idRange) Add(ref int64) {
-
 	if ref > r.Max {
 		r.Max = ref
 	}
-
 	if ref < r.Min {
 		r.Min = ref
 	}
 }
 
 /*
-duplicateNetworkJunctionPoint duplicates node from junction point network.
+createNewNodeNetworkObject creates new node_network object
+<node id="355939532" lat="52.2220383" lon="7.022982600000001" user="" uid="0" visible="true" version="8" changeset="0" timestamp="2019-09-13T06:50:45Z">
+  <tag k="expected_rcn_route_relations" v="3"></tag>
+  <tag k="network:type" v="node_network"></tag>
+  <tag k="rcn:name" v="Spechtholtshook"></tag>
+  <tag k="rcn_ref" v="53"></tag>
+  <tag k="rwn_ref" v="X32"></tag>
+</node>
+... will be transformed to:
+<node id="xxxxxxx001" lat="52.2220383" lon="7.022982600000001" user="" uid="0" visible="true" version="8" changeset="0" timestamp="2019-09-13T06:50:45Z">
+  <tag k="node_network" v="node_bicycle"></tag>
+  <tag k="name" v="53"></tag>
+</node>
+<node id="xxxxxxx002" lat="52.2220383" lon="7.022982600000001" user="" uid="0" visible="true" version="8" changeset="0" timestamp="2019-09-13T06:50:45Z">
+  <tag k="node_network" v="node_hiking"></tag>
+  <tag k="name" v="X32"></tag>
+</node>
+*/
+func createNewNodeNetworkObject(writer *bufio.Writer, sourceOsmNode *osm.Node) {
+	tags := sourceOsmNode.TagMap()
 
+	// Punktnetzwerk 'Fahrrad'
+	newOsmNode := *sourceOsmNode // copy content (don't modify origin/source node)
+	newOsmNode.ID = 0
+	newOsmNode.Tags = []osm.Tag{} // remove all source tags
+	refValue, found := tags["icn_ref"]
+	if found {
+		tag := osm.Tag{Key: "node_network", Value: "node_bicycle"}
+		newOsmNode.Tags = append(newOsmNode.Tags, tag)
+		tag = osm.Tag{Key: "name", Value: refValue}
+		newOsmNode.Tags = append(newOsmNode.Tags, tag)
+		writeNewNodeObject(writer, &newOsmNode)
+	} else {
+		refValue, found = tags["ncn_ref"]
+		if found {
+			tag := osm.Tag{Key: "node_network", Value: "node_bicycle"}
+			newOsmNode.Tags = append(newOsmNode.Tags, tag)
+			tag = osm.Tag{Key: "name", Value: refValue}
+			newOsmNode.Tags = append(newOsmNode.Tags, tag)
+			writeNewNodeObject(writer, &newOsmNode)
+		} else {
+			refValue, found = tags["rcn_ref"]
+			if found {
+				tag := osm.Tag{Key: "node_network", Value: "node_bicycle"}
+				newOsmNode.Tags = append(newOsmNode.Tags, tag)
+				tag = osm.Tag{Key: "name", Value: refValue}
+				newOsmNode.Tags = append(newOsmNode.Tags, tag)
+				writeNewNodeObject(writer, &newOsmNode)
+			} else {
+				refValue, found = tags["lcn_ref"]
+				if found {
+					tag := osm.Tag{Key: "node_network", Value: "node_bicycle"}
+					newOsmNode.Tags = append(newOsmNode.Tags, tag)
+					tag = osm.Tag{Key: "name", Value: refValue}
+					newOsmNode.Tags = append(newOsmNode.Tags, tag)
+					writeNewNodeObject(writer, &newOsmNode)
+				}
+			}
+		}
+	}
+
+	// Punktnetzwerk 'Wandern'
+	newOsmNode = *sourceOsmNode // copy content (don't modify origin/source node)
+	newOsmNode.ID = 0
+	newOsmNode.Tags = []osm.Tag{} // remove all source tags
+	refValue, found = tags["iwn_ref"]
+	if found {
+		tag := osm.Tag{Key: "node_network", Value: "node_hiking"}
+		newOsmNode.Tags = append(newOsmNode.Tags, tag)
+		tag = osm.Tag{Key: "name", Value: refValue}
+		newOsmNode.Tags = append(newOsmNode.Tags, tag)
+		writeNewNodeObject(writer, &newOsmNode)
+	} else {
+		refValue, found = tags["nwn_ref"]
+		if found {
+			tag := osm.Tag{Key: "node_network", Value: "node_hiking"}
+			newOsmNode.Tags = append(newOsmNode.Tags, tag)
+			tag = osm.Tag{Key: "name", Value: refValue}
+			newOsmNode.Tags = append(newOsmNode.Tags, tag)
+			writeNewNodeObject(writer, &newOsmNode)
+		} else {
+			refValue, found = tags["rwn_ref"]
+			if found {
+				tag := osm.Tag{Key: "node_network", Value: "node_hiking"}
+				newOsmNode.Tags = append(newOsmNode.Tags, tag)
+				tag = osm.Tag{Key: "name", Value: refValue}
+				newOsmNode.Tags = append(newOsmNode.Tags, tag)
+				writeNewNodeObject(writer, &newOsmNode)
+			} else {
+				refValue, found = tags["lwn_ref"]
+				if found {
+					tag := osm.Tag{Key: "node_network", Value: "node_hiking"}
+					newOsmNode.Tags = append(newOsmNode.Tags, tag)
+					tag = osm.Tag{Key: "name", Value: refValue}
+					newOsmNode.Tags = append(newOsmNode.Tags, tag)
+					writeNewNodeObject(writer, &newOsmNode)
+				}
+			}
+		}
+	}
+
+	// Punktnetzwerk 'Inline-Skaten'
+	newOsmNode = *sourceOsmNode // copy content (don't modify origin/source node)
+	newOsmNode.ID = 0
+	newOsmNode.Tags = []osm.Tag{} // remove all source tags
+	refValue, found = tags["rin_ref"]
+	if found {
+		tag := osm.Tag{Key: "node_network", Value: "node_inline_skates"}
+		newOsmNode.Tags = append(newOsmNode.Tags, tag)
+		tag = osm.Tag{Key: "name", Value: refValue}
+		newOsmNode.Tags = append(newOsmNode.Tags, tag)
+		writeNewNodeObject(writer, &newOsmNode)
+	}
+
+	// Punktnetzwerk 'Reiten'
+	newOsmNode = *sourceOsmNode // copy content (don't modify origin/source node)
+	newOsmNode.ID = 0
+	newOsmNode.Tags = []osm.Tag{} // remove all source tags
+	refValue, found = tags["rhn_ref"]
+	if found {
+		tag := osm.Tag{Key: "node_network", Value: "node_horse"}
+		newOsmNode.Tags = append(newOsmNode.Tags, tag)
+		tag = osm.Tag{Key: "name", Value: refValue}
+		newOsmNode.Tags = append(newOsmNode.Tags, tag)
+		writeNewNodeObject(writer, &newOsmNode)
+	}
+
+	// Punktnetzwerk 'Kanu'
+	newOsmNode = *sourceOsmNode // copy content (don't modify origin/source node)
+	newOsmNode.ID = 0
+	newOsmNode.Tags = []osm.Tag{} // remove all source tags
+	refValue, found = tags["rpn_ref"]
+	if found {
+		tag := osm.Tag{Key: "node_network", Value: "node_canoe"}
+		newOsmNode.Tags = append(newOsmNode.Tags, tag)
+		tag = osm.Tag{Key: "name", Value: refValue}
+		newOsmNode.Tags = append(newOsmNode.Tags, tag)
+		writeNewNodeObject(writer, &newOsmNode)
+	}
+
+	// Punktnetzwerk 'Motorboot'
+	newOsmNode = *sourceOsmNode // copy content (don't modify origin/source node)
+	newOsmNode.ID = 0
+	newOsmNode.Tags = []osm.Tag{} // remove all source tags
+	refValue, found = tags["rmn_ref"]
+	if found {
+		tag := osm.Tag{Key: "node_network", Value: "node_motorboat"}
+		newOsmNode.Tags = append(newOsmNode.Tags, tag)
+		tag = osm.Tag{Key: "name", Value: refValue}
+		newOsmNode.Tags = append(newOsmNode.Tags, tag)
+		writeNewNodeObject(writer, &newOsmNode)
+	}
+}
+
+/*
+writeNewNodeObject writes node object to file
+*/
+func writeNewNodeObject(writer *bufio.Writer, newOsmNode *osm.Node) {
+	newOsmNode.ID = newNodeID
+	newNodeID++
+
+	data, err := xml.MarshalIndent(newOsmNode, "  ", "  ")
+	if err != nil {
+		log.Fatalf("error <%v> at xml.MarshalIndent()", err)
+	}
+	_, err = fmt.Fprintf(writer, "%s\n", string(data))
+	if err != nil {
+		log.Fatalf("error writing output file: %v", err)
+	}
+}
+
+/*
+addHighwayTypeToTurningCycleLoop adds highway type to turning_cylce/loop node (if such node exists)
+*/
+func addHighwayTypeToTurningCircleLoop(e *osm.Way, tags map[string]string, turningCircleLoop map[osm.NodeID]*osm.Node, highwayType string) int {
+	found := 0
+	/*
+		fmt.Printf("\nID: %v, nodes = %v\n", e.ElementID(), len(e.Nodes))
+		for key, value := range tags {
+			fmt.Printf("ID: %v, %v = %v\n", e.ElementID(), key, value)
+		}
+	*/
+	for _, node := range e.Nodes {
+		// fmt.Printf("ID: %v, node = %v\n", e.ElementID(), node.ID)
+		// try to find turning_circle/loop for each node (do not break loop processing)
+		// add street type as special Freizeitkarte tag (e.g. "fzk_turning=living_street")
+		freizeitkarteTagFound := false
+		if value, ok := turningCircleLoop[node.ID]; ok {
+			// check if Freizeitkarte tag already exists
+			for _, tag := range value.Tags {
+				if tag.Key == "fzk_turning" {
+					freizeitkarteTagFound = true
+					break
+				}
+			}
+			if freizeitkarteTagFound == false {
+				freizeitkarteTag := osm.Tag{Key: "fzk_turning", Value: highwayType}
+				value.Tags = append(value.Tags, freizeitkarteTag)
+				// fmt.Printf("turning_circle/loop found: key = %v, value = %#v\n", node.ID, value)
+				found++
+			}
+		}
+	}
+
+	return found
+}
+
+/*
+printProgUsage prints program usage.
+*/
+func printProgUsage() {
+	fmt.Printf("\nUsage:\n")
+	fmt.Printf("  %s -inputOSM=filename -outputNodes=filename -startNode=number\n", progName)
+	fmt.Printf("\nExample:\n")
+	fmt.Printf("  %s -inputOSM=osmdata.pbf -outputNodes=osmpp.xml -startNode=1000000000000\n", progName)
+	fmt.Printf("\nOptions:\n")
+	flag.PrintDefaults()
+
+	os.Exit(1)
+}
+
+/*
+duplicateNetworkJunctionPoint duplicates node from junction point network.
 <node id="355939532" lat="52.2220383" lon="7.022982600000001" user="" uid="0" visible="true" version="8" changeset="0" timestamp="2019-09-13T06:50:45Z">
   <tag k="expected_rcn_route_relations" v="3"></tag>
   <tag k="network:type" v="node_network"></tag>
@@ -386,9 +665,9 @@ duplicateNetworkJunctionPoint duplicates node from junction point network.
   <tag k="name" v="Spechtholtshook"></tag>
 </node>
 */
+/*
 func duplicateNetworkJunctionPoint(writer *bufio.Writer, sourceOsmNode *osm.Node, nodeID osm.NodeID, refKey, refValue, nameKey, nameValue string) {
-
-	newOsmNode := sourceOsmNode
+	newOsmNode := *sourceOsmNode // copy content (don't modify origin/source node)
 	newOsmNode.ID = nodeID
 	newOsmNode.Tags = []osm.Tag{}
 
@@ -415,20 +694,57 @@ func duplicateNetworkJunctionPoint(writer *bufio.Writer, sourceOsmNode *osm.Node
 		log.Fatalf("error writing output file: %v", err)
 	}
 }
+*/
 
 /*
-Print program usage.
+	nameKey := "rcn:name"
+	nameValue, _ := tags[nameKey]
+
+	refKey := "rcn_ref" // cycling
+	refValue, found := tags[refKey]
+	if found {
+		duplicateNetworkJunctionPoint(writer, e, nodeID, refKey, refValue, nameKey, nameValue)
+		nodeID++
+		junctionPointsWritten++
+	}
+
+	refKey = "rwn_ref" // walking
+	refValue, found = tags[refKey]
+	if found {
+		duplicateNetworkJunctionPoint(writer, e, nodeID, refKey, refValue, nameKey, nameValue)
+		nodeID++
+		junctionPointsWritten++
+	}
+
+	refKey = "rin_ref" // inline skating
+	refValue, found = tags[refKey]
+	if found {
+		duplicateNetworkJunctionPoint(writer, e, nodeID, refKey, refValue, nameKey, nameValue)
+		nodeID++
+		junctionPointsWritten++
+	}
+
+	refKey = "rhn_ref" // horse riding
+	refValue, found = tags[refKey]
+	if found {
+		duplicateNetworkJunctionPoint(writer, e, nodeID, refKey, refValue, nameKey, nameValue)
+		nodeID++
+		junctionPointsWritten++
+	}
+
+	refKey = "rpn_ref" // canoeing
+	refValue, found = tags[refKey]
+	if found {
+		duplicateNetworkJunctionPoint(writer, e, nodeID, refKey, refValue, nameKey, nameValue)
+		nodeID++
+		junctionPointsWritten++
+	}
+
+	refKey = "rmn_ref" // motorboat driving
+	refValue, found = tags[refKey]
+	if found {
+		duplicateNetworkJunctionPoint(writer, e, nodeID, refKey, refValue, nameKey, nameValue)
+		nodeID++
+		junctionPointsWritten++
+	}
 */
-func printProgUsage() {
-
-	fmt.Printf("\nUsage:\n")
-	fmt.Printf("  %s -inputOSM=filename -outputNodes=filename -startNode=number\n", progName)
-
-	fmt.Printf("\nExample:\n")
-	fmt.Printf("  %s -inputOSM=osmdata.pbf -outputNodes=osmnodes.xml -startNode=10000000000\n", progName)
-
-	fmt.Printf("\nOptions:\n")
-	flag.PrintDefaults()
-
-	os.Exit(1)
-}

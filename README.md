@@ -2,7 +2,7 @@
 
 ## Purpose
 
-'osmpp' (OSM preprocessing) is a tool to preprocess OSM data. It's typically used within an OSM data processing tool chain.
+'osmpp' (OSM preprocessing) is a tool to pre-process OSM data. It's typically used within an OSM data processing tool chain.
 
 ## Remarks
 
@@ -16,23 +16,25 @@ make
 
 ## Functionality
 
-Duplicates OSM junction point nodes.
+Processes node_network objects.
+
+Processes turning_circle/loop objects.
 
 
 ## Usage
 
 ```txt
 Program:
-  Name                    : osmpp
-  Release                 : v0.1.0 - 2019/11/23
+  Name                    : main
+  Release                 : v0.2.0 - 2020/09/05
   Purpose                 : OSM data pre-processing
-  Info                    : Duplicates OSM junction point nodes.
+  Info                    : Processes node_network and turning_circle objects.
 
 Usage:
-  osmpp -inputOSM=filename -outputNodes=filename -startNode=number
+  main -inputOSM=filename -outputNodes=filename -startNode=number
 
 Example:
-  osmpp -inputOSM=osmdata.pbf -outputNodes=osmnodes.xml -startNode=10000000000
+  main -inputOSM=osmdata.pbf -outputNodes=osmpp.xml -startNode=1000000000000
 
 Options:
   -inputOSM string
